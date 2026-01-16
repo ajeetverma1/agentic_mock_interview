@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState } from 'react'
 import InterviewInterface from './components/InterviewInterface'
 import SetupScreen from './components/SetupScreen'
 import './App.css'

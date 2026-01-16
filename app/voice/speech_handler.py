@@ -1,36 +1,51 @@
-import whisper
-import pyttsx3
 import io
 import base64
-import wave
-import numpy as np
-from typing import Optional
 import tempfile
 import os
+from typing import Optional
+
+# Optional imports - handle gracefully if not installed
+try:
+    import whisper
+except ImportError:
+    whisper = None
+
+try:
+    import pyttsx3
+except ImportError:
+    pyttsx3 = None
 
 class SpeechHandler:
     def __init__(self):
         """Initialize speech-to-text and text-to-speech handlers."""
         # Initialize Whisper model (small model for faster processing)
-        try:
-            self.whisper_model = whisper.load_model("base")
-        except Exception as e:
-            print(f"Warning: Could not load Whisper model: {e}")
+        if whisper is None:
             self.whisper_model = None
+            print("Warning: Whisper not installed. Speech-to-text will not be available.")
+        else:
+            try:
+                self.whisper_model = whisper.load_model("base")
+            except Exception as e:
+                print(f"Warning: Could not load Whisper model: {e}")
+                self.whisper_model = None
         
         # Initialize TTS engine
-        try:
-            self.tts_engine = pyttsx3.init()
-            # Configure TTS properties
-            voices = self.tts_engine.getProperty('voices')
-            if voices:
-                # Try to use a more natural voice
-                self.tts_engine.setProperty('voice', voices[0].id)
-            self.tts_engine.setProperty('rate', 150)  # Speed of speech
-            self.tts_engine.setProperty('volume', 0.9)  # Volume level
-        except Exception as e:
-            print(f"Warning: Could not initialize TTS: {e}")
+        if pyttsx3 is None:
             self.tts_engine = None
+            print("Warning: pyttsx3 not installed. Text-to-speech will not be available.")
+        else:
+            try:
+                self.tts_engine = pyttsx3.init()
+                # Configure TTS properties
+                voices = self.tts_engine.getProperty('voices')
+                if voices:
+                    # Try to use a more natural voice
+                    self.tts_engine.setProperty('voice', voices[0].id)
+                self.tts_engine.setProperty('rate', 150)  # Speed of speech
+                self.tts_engine.setProperty('volume', 0.9)  # Volume level
+            except Exception as e:
+                print(f"Warning: Could not initialize TTS: {e}")
+                self.tts_engine = None
     
     def speech_to_text(self, audio_data: bytes) -> str:
         """
@@ -78,7 +93,7 @@ class SpeechHandler:
         
         try:
             # Save to temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav', delete=False) as tmp_file:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
                 tmp_path = tmp_file.name
             
             # Generate speech and save to file
