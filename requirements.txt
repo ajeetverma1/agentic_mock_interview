@@ -1,40 +1,14 @@
-# # Web Framework
-# fastapi==0.104.1
-# uvicorn[standard]==0.24.0
-# python-multipart==0.0.6
-
-# # LangChain & LangGraph
-# langchain==0.1.0
-# langchain-core==0.1.10
-# langchain-google-genai==1.0.1
-# langgraph==0.0.20
-
-# # Voice Processing
-# openai-whisper==20231117
-# pyttsx3==2.90
-# pydub==0.25.1
-# speechrecognition==3.10.0
-
-# # Audio Processing
-# numpy==1.24.3
-# scipy==1.11.4
-
-# # Utilities
-# pydantic==2.5.0
-# python-dotenv==1.0.0
-# aiofiles==23.2.1
-
-
 # Web Framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
 python-multipart==0.0.6
 
-# LangChain & LangGraph
-langchain==0.1.0
-langchain-core==0.1.10
+# LangChain stack (FIXED & COMPATIBLE)
+langchain==0.1.16
+langchain-community==0.0.38
+langchain-core==0.1.52
+langgraph==0.0.25
 langchain-google-genai==1.0.1
-langgraph==0.0.20
 
 # Voice Processing
 openai-whisper==20231117
@@ -42,11 +16,12 @@ pyttsx3==2.90
 pydub==0.25.1
 speechrecognition==3.10.0
 
-# Audio Processing
+# Audio / Math
 numpy==1.24.3
-scipy==1.10.1   # 🔧 downgraded for compatibility
+scipy==1.10.1
 
-# Utilities
-pydantic==2.5.0
+# Config / Utils
+pydantic==2.5.3
+pydantic-settings==2.1.0
 python-dotenv==1.0.0
 aiofiles==23.2.1

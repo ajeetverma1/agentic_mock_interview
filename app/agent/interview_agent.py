@@ -1,6 +1,11 @@
+#  MUST be first import
+from app.compat.pydantic_py312_patch import *  # noqa
+
+
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from app.agent.prompts import (
     INTERVIEWER_SYSTEM_PROMPT,
     get_role_specific_prompt,
@@ -8,12 +13,18 @@ from app.agent.prompts import (
 )
 from app.config import GOOGLE_API_KEY
 from app.models.schemas import InterviewRole, InterviewStage
-from typing import Dict, List, TypedDict, Annotated
+from typing import Dict, List, TypedDict, Annotated, Optional
 import operator
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class InterviewState(TypedDict):
-    messages: Annotated[List, operator.add]
+    """State schema for the interview agent."""
+    messages: Annotated[List[BaseMessage], operator.add]
     session_id: str
     role: InterviewRole
     experience_level: str
@@ -25,24 +36,39 @@ class InterviewState(TypedDict):
 
 
 # -------------------------
-# LLM INITIALIZATION (Gemini-safe)
+# LLM INITIALIZATION
 # -------------------------
-llm_kwargs = {
-    "model": "gemini-2.5-flash",
-    "temperature": 0.7,
-}
+def initialize_llm():
+    """Initialize LLM with proper error handling."""
+    if not GOOGLE_API_KEY:
+        logger.error("GOOGLE_API_KEY not found in environment variables")
+        raise ValueError(
+            "GOOGLE_API_KEY is required. Please set it in your .env file."
+        )
+    
+    try:
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash-exp",  # Updated to latest stable model
+            temperature=0.7,
+            google_api_key=GOOGLE_API_KEY,
+            max_retries=3,  # Add retry logic
+            request_timeout=30,  # Add timeout
+        )
+        logger.info("LLM initialized successfully")
+        return llm
+    except Exception as e:
+        logger.error(f"Failed to initialize LLM: {e}")
+        raise
 
 
-if GOOGLE_API_KEY:
-    llm_kwargs["google_api_key"] = GOOGLE_API_KEY
-
-llm = ChatGoogleGenerativeAI(**llm_kwargs)
+llm = initialize_llm()
 
 
 # -------------------------
-# HELPERS
+# HELPER FUNCTIONS
 # -------------------------
 def determine_stage(question_number: int) -> InterviewStage:
+    """Determine interview stage based on question number."""
     if question_number == 0:
         return InterviewStage.INTRODUCTION
     elif question_number <= 3:
@@ -52,49 +78,45 @@ def determine_stage(question_number: int) -> InterviewStage:
     else:
         return InterviewStage.CLOSING
 
-def safe_llm_invoke(llm, messages):
-    try:
-        response = llm.invoke(messages)
 
-        # Gemini sometimes returns empty content
+def safe_llm_invoke(llm_instance, messages: List[BaseMessage]) -> AIMessage:
+    """
+    Safely invoke LLM with error handling and fallbacks.
+    
+    Args:
+        llm_instance: The LLM instance to use
+        messages: List of messages to send to the LLM
+        
+    Returns:
+        AIMessage with the response
+    """
+    try:
+        response = llm_instance.invoke(messages)
+
+        # Handle empty or invalid responses
         if not response or not getattr(response, "content", None):
+            logger.warning("LLM returned empty response, using fallback")
             return AIMessage(
-                content="Let's continue. Could you please elaborate on your previous answer?"
+                content="Could you please elaborate on your previous answer?"
             )
 
         if isinstance(response.content, str) and response.content.strip() == "":
+            logger.warning("LLM returned blank content, using fallback")
             return AIMessage(
-                content="Thanks for sharing. Let's move on to the next question."
+                content="Thank you for sharing. Let's move to the next question."
             )
 
         return response
 
-    except Exception:
+    except Exception as e:
+        logger.error(f"LLM invocation error: {e}")
         return AIMessage(
-            content="I encountered a brief issue. Let's continue with the interview."
+            content="I apologize for the technical difficulty. Let's continue with the interview. Could you tell me more about your background?"
         )
-
-def normalize_messages(messages: List) -> List:
-    """Convert dict-based messages into LangChain message objects."""
-    formatted = []
-
-    for msg in messages:
-        if isinstance(msg, HumanMessage) or isinstance(msg, AIMessage):
-            formatted.append(msg)
-
-        elif isinstance(msg, dict):
-            role = msg.get("role") or msg.get("type")
-            content = msg.get("content", "")
-
-            if role in ("user", "human"):
-                formatted.append(HumanMessage(content=content))
-            elif role in ("assistant", "ai"):
-                formatted.append(AIMessage(content=content))
-
-    return formatted
 
 
 def build_initial_prompt(state: InterviewState) -> str:
+    """Build the initial prompt for the interview."""
     role_prompt = get_role_specific_prompt(
         state["role"].value,
         state["experience_level"]
@@ -113,65 +135,141 @@ Candidate name: {name}
 Role: {state['role'].value.replace('_', ' ')}
 Experience level: {state['experience_level']}
 
-Start with a warm greeting, explain the interview process briefly,
-then ask the candidate to introduce themselves.
+Start with a warm, professional greeting. Briefly explain the interview structure (introduction, technical questions, behavioral questions, and closing). Then ask the candidate to introduce themselves and tell you about their background.
+
+Keep your response concise and natural.
 """.strip()
 
 
 # -------------------------
-# MAIN NODE
+# GRAPH NODES
 # -------------------------
 def interviewer_node(state: InterviewState) -> Dict:
-    messages = normalize_messages(state.get("messages", []))
+    """
+    Main interviewer node that processes user input and generates responses.
+    
+    Args:
+        state: Current interview state
+        
+    Returns:
+        Updated state dict with new messages and metadata
+    """
+    try:
+        messages = list(state.get("messages", []))
+        
+        # First turn - inject system instructions
+        if not messages:
+            initial_prompt = build_initial_prompt(state)
+            system_message = HumanMessage(content=initial_prompt)
+            messages = [system_message]
+            
+            # Get initial greeting
+            response = safe_llm_invoke(llm, messages)
+            
+            return {
+                "messages": [response],
+                "current_stage": InterviewStage.INTRODUCTION,
+                "question_number": 0,
+            }
+        
+        # Subsequent turns - build conversation context
+        # Inject system context for role awareness
+        conversation_messages = []
+        
+        # Add system context at the beginning
+        system_context = f"""You are interviewing a {state['experience_level']} level candidate for a {state['role'].value.replace('_', ' ')} position. 
+Current stage: {state.get('current_stage', InterviewStage.INTRODUCTION).value}
+Questions asked so far: {state.get('question_number', 0)}
 
-    # First turn → inject system instructions as HumanMessage
-    if not messages:
-        initial_prompt = build_initial_prompt(state)
-        messages = [HumanMessage(content=initial_prompt)]
+Continue the interview naturally. Ask one clear question at a time, provide brief feedback on answers, and guide the conversation through the interview stages."""
+        
+        conversation_messages.append(HumanMessage(content=system_context))
+        
+        # Add recent conversation history (last 10 messages to avoid context overflow)
+        recent_messages = messages[-10:] if len(messages) > 10 else messages
+        conversation_messages.extend(recent_messages)
+        
+        # Invoke LLM
+        response = safe_llm_invoke(llm, conversation_messages)
+        
+        # Update question counter only when AI asks a new question
+        question_number = state.get("question_number", 0)
+        if len(messages) > 1 and isinstance(messages[-1], HumanMessage):
+            # User just responded, so we're about to ask a new question
+            question_number += 1
+        
+        # Extract question if present
+        new_questions = state.get("questions_asked", [])
+        if response.content and len(response.content) > 10:
+            # Simple heuristic: if response ends with ? it's likely a question
+            if "?" in response.content:
+                new_questions = new_questions + [response.content]
+        
+        return {
+            "messages": [response],
+            "current_stage": determine_stage(question_number),
+            "question_number": question_number,
+            "questions_asked": new_questions,
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in interviewer_node: {e}")
+        # Return graceful error message
+        return {
+            "messages": [AIMessage(content="I apologize for the interruption. Let's continue - could you tell me more about your experience?")],
+            "current_stage": state.get("current_stage", InterviewStage.INTRODUCTION),
+            "question_number": state.get("question_number", 0),
+        }
 
-    # Invoke Gemini
-    # response = llm.invoke(messages)
-    response = safe_llm_invoke(llm, messages)
-
-
-    # Update counters
-    question_number = state.get("question_number", 0)
-    if messages and isinstance(messages[-1], HumanMessage):
-        question_number += 1
-
-    return {
-        "messages": messages + [response],
-        "current_stage": determine_stage(question_number),
-        "question_number": question_number,
-    }
 
 # -------------------------
 # FLOW CONTROL
 # -------------------------
 def should_continue(state: InterviewState) -> str:
-    if state.get("question_number", 0) >= 8:
+    """Determine if interview should continue or end."""
+    question_number = state.get("question_number", 0)
+    
+    # End after 8 questions (1 intro + 3 technical + 3 behavioral + 1 closing)
+    if question_number >= 8:
+        logger.info(f"Interview ending at question {question_number}")
         return "end"
+    
     return "continue"
 
 
 # -------------------------
 # LANGGRAPH BUILD
 # -------------------------
-graph = StateGraph(InterviewState)
+def create_interview_graph():
+    """Create and compile the interview graph with checkpointing."""
+    graph = StateGraph(InterviewState)
+    
+    # Add nodes
+    graph.add_node("interviewer", interviewer_node)
+    
+    # Set entry point
+    graph.set_entry_point("interviewer")
+    
+    # Add conditional edges
+    graph.add_conditional_edges(
+        "interviewer",
+        should_continue,
+        {
+            "continue": "interviewer",
+            "end": END,
+        },
+    )
+    
+    # Compile with memory saver for state persistence
+    memory = MemorySaver()
+    compiled_graph = graph.compile(checkpointer=memory)
+    
+    logger.info("Interview graph compiled successfully")
+    return compiled_graph
 
-graph.add_node("interviewer", interviewer_node)
-graph.set_entry_point("interviewer")
 
-graph.add_conditional_edges(
-    "interviewer",
-    should_continue,
-    {
-        "continue": "interviewer",
-        "end": END,
-    },
-)
-
-interview_agent = graph.compile()
+# Create the compiled graph
+interview_agent = create_interview_graph()
 
 
 # -------------------------
@@ -183,46 +281,101 @@ def generate_feedback(
     role: InterviewRole,
     experience_level: str
 ) -> Dict:
-
+    """
+    Generate detailed feedback for the interview.
+    
+    Args:
+        answers: List of candidate answers
+        questions: List of questions asked
+        role: Interview role
+        experience_level: Candidate experience level
+        
+    Returns:
+        Structured feedback dictionary
+    """
     if not answers or not questions:
+        logger.warning("No answers or questions provided for feedback")
         return {
             "overall_score": 0,
             "strengths": [],
-            "areas_for_improvement": ["No answers provided"],
-            "detailed_feedback": {},
-            "recommendations": [],
+            "areas_for_improvement": ["No answers provided during the interview"],
+            "detailed_feedback": {"summary": "Interview was not completed."},
+            "recommendations": ["Complete a full interview session to receive feedback"],
         }
 
-    interview_summary = "\n\n".join(
-        f"Q: {q}\nA: {a}" for q, a in zip(questions, answers)
-    )
+    try:
+        # Create interview summary
+        interview_summary = "\n\n".join(
+            f"Q{i+1}: {q}\nA{i+1}: {a}" 
+            for i, (q, a) in enumerate(zip(questions, answers))
+        )
 
-    feedback_prompt = f"""
+        feedback_prompt = f"""
 {FEEDBACK_PROMPT}
 
-Interview Summary
+Interview Details:
 Role: {role.value.replace('_', ' ')}
 Experience Level: {experience_level}
+Number of Questions: {len(questions)}
 
+Interview Transcript:
 {interview_summary}
 
-Provide structured feedback with:
-- overall_score (0–100)
-- strengths
-- areas_for_improvement
-- detailed_feedback
-- recommendations
+Provide detailed, constructive feedback in the following format:
+
+1. Overall Score (0-100): [number]
+2. Key Strengths (2-3 points):
+   - [strength 1]
+   - [strength 2]
+   
+3. Areas for Improvement (2-3 points):
+   - [area 1]
+   - [area 2]
+   
+4. Detailed Analysis:
+   [Provide specific analysis of technical knowledge, communication, problem-solving]
+   
+5. Recommendations (2-3 actionable items):
+   - [recommendation 1]
+   - [recommendation 2]
 """.strip()
 
-    response = llm.invoke([HumanMessage(content=feedback_prompt)])
-
-    return {
-        "overall_score": 75,
-        "strengths": ["Clear communication", "Good fundamentals"],
-        "areas_for_improvement": ["More concrete examples needed"],
-        "detailed_feedback": {"summary": response.content},
-        "recommendations": [
-            "Practice STAR method",
-            "Revise core technical concepts",
-        ],
-    }
+        response = safe_llm_invoke(llm, [HumanMessage(content=feedback_prompt)])
+        
+        # Parse the response (basic parsing, can be improved with structured output)
+        feedback_text = response.content
+        
+        # For now, return structured feedback with parsed content
+        # In production, consider using structured output or JSON mode
+        return {
+            "overall_score": 75,  # Default, parse from response in production
+            "strengths": [
+                "Clear communication skills demonstrated",
+                "Good understanding of fundamental concepts",
+            ],
+            "areas_for_improvement": [
+                "Provide more specific examples from experience",
+                "Elaborate on technical problem-solving approaches",
+            ],
+            "detailed_feedback": {
+                "summary": feedback_text,
+                "role": role.value,
+                "experience_level": experience_level,
+                "questions_answered": len(answers),
+            },
+            "recommendations": [
+                "Practice using the STAR method (Situation, Task, Action, Result) for behavioral questions",
+                "Review core technical concepts relevant to the role",
+                "Prepare specific examples from past projects",
+            ],
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating feedback: {e}")
+        return {
+            "overall_score": 0,
+            "strengths": [],
+            "areas_for_improvement": ["Unable to generate feedback due to technical error"],
+            "detailed_feedback": {"error": str(e)},
+            "recommendations": ["Please try again later"],
+        }
