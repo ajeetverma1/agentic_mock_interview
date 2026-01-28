@@ -37,10 +37,13 @@ class SpeechHandler:
             try:
                 self.tts_engine = pyttsx3.init()
                 # Configure TTS properties
-                voices = self.tts_engine.getProperty('voices')
-                if voices:
-                    # Try to use a more natural voice
-                    self.tts_engine.setProperty('voice', voices[0].id)
+                try:
+                    voices = self.tts_engine.getProperty('voices')
+                    # Skip voice selection to avoid indexing issues on Windows
+                    # Use default system voice
+                except Exception:
+                    # Continue with default voice configuration
+                    pass
                 self.tts_engine.setProperty('rate', 150)  # Speed of speech
                 self.tts_engine.setProperty('volume', 0.9)  # Volume level
             except Exception as e:
@@ -117,7 +120,13 @@ class SpeechHandler:
         try:
             # Remove data URL prefix if present
             if ',' in base64_string:
-                base64_string = base64_string.split(',')[1]
+                try:
+                    parts = base64_string.split(',')
+                    if len(parts) > 1:
+                        base64_string = parts[1]
+                except (IndexError, AttributeError):
+                    # If split fails, use original string
+                    pass
             
             return base64.b64decode(base64_string)
         except Exception as e:

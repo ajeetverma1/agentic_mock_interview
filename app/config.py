@@ -41,7 +41,7 @@ SESSION_TIMEOUT_SECONDS = int(os.getenv("SESSION_TIMEOUT_SECONDS", "1800"))  # 3
 MAX_SESSIONS = int(os.getenv("MAX_SESSIONS", "100"))  # Maximum concurrent sessions
 
 # LLM Configuration
-LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.0-flash-exp")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash-lite")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.7"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "30"))

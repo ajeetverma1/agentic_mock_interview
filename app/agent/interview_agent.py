@@ -48,7 +48,7 @@ def initialize_llm():
     
     try:
         llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-exp",  # Updated to latest stable model
+            model="gemini-2.5-flash-lite",  # Updated to latest stable model
             temperature=0.7,
             google_api_key=GOOGLE_API_KEY,
             max_retries=3,  # Add retry logic
@@ -164,7 +164,7 @@ def interviewer_node(state: InterviewState) -> Dict:
             messages = [system_message]
             
             # Get initial greeting
-            response = safe_llm_invoke(llm, messages)
+            response = safe_llm_invoke(llm, messages)  # type: ignore
             
             return {
                 "messages": [response],
@@ -192,9 +192,9 @@ Continue the interview naturally. Ask one clear question at a time, provide brie
         # Invoke LLM
         response = safe_llm_invoke(llm, conversation_messages)
         
-        # Update question counter only when AI asks a new question
+# Update question counter only when AI asks a new question
         question_number = state.get("question_number", 0)
-        if len(messages) > 1 and isinstance(messages[-1], HumanMessage):
+        if len(messages) > 1 and len(messages) > 0 and isinstance(messages[-1], HumanMessage):
             # User just responded, so we're about to ask a new question
             question_number += 1
         

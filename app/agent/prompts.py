@@ -90,6 +90,15 @@ def get_role_specific_prompt(role: str, experience_level: str) -> str:
     
     questions = role_questions.get(role, {}).get(experience_level, [])
     
+    # Fallback questions for general role or missing role/experience
+    if not questions:
+        questions = role_questions.get("software_engineer", {}).get(experience_level, [
+            "Tell me about yourself and your background.",
+            "What interests you about this role?",
+            "Describe a challenge you've faced and how you overcame it.",
+            "Where do you see yourself in 5 years?",
+        ])
+    
     return f"""
 You are conducting a {experience_level} level interview for a {role} position.
 
