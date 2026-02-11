@@ -144,7 +144,3 @@ Edit `app/config.py` to customize:
 - Voice features require microphone permissions
 - For production, consider using cloud-based TTS/STT services
 - Session data is stored in memory (use Redis/DB for production)
-
-## License
-
-MIT License
